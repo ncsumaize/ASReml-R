@@ -1,0 +1,316 @@
+---
+title: "Exp35 2015 data analysis"
+author: "JBH"
+date: "May 23, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(asreml)
+library(dplyr)
+setwd("M:/File_Server/FieldBooks/Data15/Exp35")
+```
+
+## Get ear rot, fungal density, and fumonisin data
+
+I noticed a couple of plots with no ear counts and no ear rot values, but Laura had fumonisin data, I am knocking those out.
+```{r getData}
+dat35 = read.csv("Exp35_2015_rot_density_fum.csv")
+dat35 = mutate(dat35, Fum_LM = FUMppb/1000, 
+               Rep = as.factor(Rep), Block = as.factor(Block), 
+               Fum_LM = ifelse(is.na(NoEars), NA, Fum_LM)) %>% rename(Fum_TM = fum_ppm_TPM) %>% select(Rep,Block,Plot,Entry,InoculationMethod, NoEars, AvgRot, Fum_LM, Fum_TM)
+tbl_df(dat35)
+```
+
+Check histograms of raw data
+```{r}
+for (trait in c("AvgRot", "Fum_LM", "Fum_TM")){
+  hist(dat35[,trait], main = trait)
+}
+```
+
+
+Compare Laura vs. Thiago ppm overall and each against mean ear rot
+```{r cor}
+cor(dat35[,c("AvgRot", "Fum_LM", "Fum_TM")], use = "pairwise.complete.obs")
+```
+Neither fumonisin value is very highly correlated with ear rot, but fum_ppm_TPM is a little better.
+
+```{r pairs}
+pairs(dat35[,c("AvgRot", "Fum_LM", "Fum_TM")], main = "Raw data relationships\nincluding both inoculation methods")
+```
+
+## Compare toothpick inoculations to backpack inoculations
+
+```{r long_wide}
+dat35.syr = filter(dat35, InoculationMethod == "Syringe") %>%
+  rename(No_Ears_syr = NoEars, Rot_syr = AvgRot, Fum_LM_syr = Fum_LM, Fum_TM_syr = Fum_TM) %>% select(-InoculationMethod)
+
+dat35.tooth = filter(dat35, InoculationMethod == "Toothpick") %>% 
+  rename(No_Ears_tooth = NoEars, Rot_tooth = AvgRot, Fum_LM_tooth = Fum_LM, Fum_TM_tooth = Fum_TM) %>% select(-InoculationMethod)
+
+dat35.wide = merge(dat35.syr, dat35.tooth, all = T)
+```
+
+Check the correlations and plot them
+```{r}
+cor(select(dat35.wide, -c(Rep, Block, Plot, Entry, No_Ears_syr, No_Ears_tooth)), use = "pairwise.complete.obs")
+```
+The best correlations are between the two fumonisin measures with toothpick inoculation or with syringe, but not across methods!
+```{r, fig.width=8, fig.height=9}
+pairs(select(dat35.wide, -c(Rep, Block, Entry, No_Ears_syr, No_Ears_tooth)), main = "Raw data relationships, \nseparating inoculation methods")
+```
+It really looks like outliers are driving these relationships.
+
+##Ear rot raw data analysis
+
+Make a function to generate initial analysis results on raw data.
+Note the use of assign() here, this is to work around a problem referencing form object later in the function call. 
+
+see this:
+https://www.vsni.co.uk/forum/viewtopic.php?t=1081
+
+
+```{r}
+exp35_lmm = function(data, trait){
+  form = as.formula(paste(trait, "~ Entry*InoculationMethod"))
+  assign("form", form, envir = globalenv() )
+  mod = asreml(fixed = form, random = ~ Rep + Block:Rep, weights = NoEars, data = data, na.method.X='omit')
+
+  print(summary(mod))
+  print(wald.asreml(mod, denDF = "default", ssType = "conditional", data = data))
+  plot(mod)
+  
+  return(mod)
+}
+
+rot.raw = exp35_lmm(dat35, 'AvgRot')
+```
+## Analysis of raw fumonisin Laura data
+
+```{r}
+Fum_LM.raw = exp35_lmm(dat35, 'Fum_LM')
+```
+
+## Analysis of raw fumonisin Thiago data
+```{r}
+Fum_TM.raw = exp35_lmm(dat35, 'Fum_TM')
+```
+
+
+Looks like we need a transformation of the data. Maybe a log transformation will help all of the traits
+```{r}
+dat35 = mutate(dat35, 
+               ln_Rot = log(1 + AvgRot),
+               ln_Fum_LM = log(1 + Fum_LM),
+               ln_Fum_TM = log(1 + Fum_TM))
+```
+
+Check the correlations among transformed values, across inoculation methods.
+```{r}
+cor(dat35[,c("ln_Rot", "ln_Fum_LM", "ln_Fum_TM")], use = "pairwise.complete.obs")
+```
+```{r}
+pairs(dat35[,c("ln_Rot", "ln_Fum_LM", "ln_Fum_TM")])
+```
+OK! this looks much nicer!
+
+Check the correlations among transformed values separately for each inoculation method.
+
+```{r}
+dat35.wide = mutate(dat35.wide, 
+                    ln_Rot_syr = log(1 + Rot_syr),
+                    ln_Fum_LM_syr = log(1 + Fum_LM_syr),
+                    ln_Fum_TM_syr = log(1 + Fum_TM_syr),
+                    ln_Rot_tooth = log(1 + Rot_tooth),
+                    ln_Fum_LM_tooth = log(1 + Fum_LM_tooth),
+                    ln_Fum_TM_tooth = log(1 + Fum_TM_tooth)
+                    )
+
+cor(dat35.wide[,c("ln_Rot_syr", "ln_Fum_LM_syr", "ln_Fum_TM_syr", "ln_Rot_tooth","ln_Fum_LM_tooth", "ln_Fum_TM_tooth")], use = "pairwise.complete.obs")
+```
+
+
+## Analysis of log transformed Ear Rot
+
+```{r}
+Rot.ln = exp35_lmm(dat35, 'ln_Rot')
+```
+## Analysis of log transformed fumonisin (Laura)
+
+```{r}
+Fum_LM.ln = exp35_lmm(dat35, 'ln_Fum_LM')
+```
+
+## Analysis of log transformed fumonisin (Thiago)
+```{r}
+Fum_TM.ln = exp35_lmm(dat35, 'ln_Fum_TM')
+```
+
+Log transformed variables have better residuals distributions, so we will use them. 
+
+#Now compute heritabilities for each combination of inoculation method and trait
+
+Cullis estimator is :
+$$
+h^2 = 1 - \dfrac{(Avg.\ variance\ of\ line\ comparisons)}{2Vg}
+$$
+```{r}
+exp35_h2 = function(data, inoc, trait){
+  data.sub = data[data$InoculationMethod == inoc,]
+  form = as.formula(paste(trait, "~ 1"))
+  assign("form", form, envir = globalenv() )
+  mod = asreml(fixed = form, random = ~ Rep + Block:Rep + Entry, weights = NoEars, data = data.sub, na.method.X='omit', maxiter = 25, trace = F)
+
+  print(summary(mod))
+
+  #estimate heritability with Cullis estimator
+  preds = predict(mod, classify = "Entry", data = data)
+  avsed = preds$predictions$avsed
+  
+  Vcomps = summary(mod)$varcomp
+  Vg = Vcomps["Entry!Entry.var", "component"]
+  h2 =1 -((avsed**2)/(2*Vg))
+  print(paste("Heritability of line means for", trait, "and", inoc, ":", round(h2, 2)))
+    
+  return(h2)
+}
+
+```
+Apply the heritability estimator over each combination of trait and inoculation method
+```{r}
+h2.results = list()
+for (inoc in c("Syringe", "Toothpick")){
+  for (trait in c("ln_Rot", "ln_Fum_LM", "ln_Fum_TM")){
+    h2.results[[paste(inoc, trait)]] = exp35_h2(dat35, inoc, trait)
+  }
+}
+```
+
+```{r}
+for (i in names(h2.results)) {
+  print(i)
+  print(paste("heritability of line means =", round(h2.results[[i]], 2)))
+}
+```
+We will also check results for the average values across inoculation methods and assay methods. ln_FUM_avg is the average across inoculation methods and assay methods. NoEars is used to weight the means for the two different inoculation methods and a new NoEars value is computed as the sum of number of ears for the two methods, used for weighting the mixed model analysis below.
+
+```{r}
+dat35b = group_by(dat35, Rep, Plot, Entry) %>% 
+  summarise(ln_Rot_mn = weighted.mean(ln_Rot, NoEars, na.rm = T),
+            ln_Fum_LM_mn = weighted.mean(ln_Fum_LM, NoEars, na.rm = T), 
+            ln_Fum_TM_mn = weighted.mean(ln_Fum_TM, NoEars, na.rm = T),
+            NoEars = sum(NoEars)) %>%
+  mutate(ln_FUM_avg = rowMeans(cbind(ln_Fum_LM_mn, ln_Fum_TM_mn), na.rm = T))
+```
+This works nicely to get the means:
+```{r}
+tbl_df(dat35b)
+```
+But, we lost the incomplete block info, so need to grab that and merge it back in.
+```{r}
+dat35.blocks = group_by(dat35, Rep, Plot) %>% summarize(Block = unique(Block))
+tbl_df(dat35.blocks)
+```
+```{r}
+dat35b = merge(dat35.blocks, dat35b)
+```
+
+One more heritability function, this time to work on the average trait values in dat35b data frame
+```{r}
+exp35b_h2 = function(data, trait){
+  form = as.formula(paste(trait, "~ 1"))
+  assign("form", form, envir = globalenv() )
+  mod = asreml(fixed = form, random = ~ Rep + Block:Rep + Entry, weights = NoEars, data = data, na.method.X='omit', maxiter = 25, trace = F)
+
+  print(summary(mod))
+  plot(mod)
+
+  #estimate heritability as the average reliability of line predictions
+  preds = predict(mod, classify = "Entry", data = data)
+  avsed = preds$predictions$avsed
+  
+  Vcomps = summary(mod)$varcomp
+  Vg = Vcomps["Entry!Entry.var", "component"]
+  h2 =1 -((avsed**2)/(2*Vg))
+  print(paste("Heritability of line means for", trait, ":", round(h2, 2)))
+    
+  return(h2)
+}
+```
+
+```{r}
+h2.results.b = list()
+for (trait in c("ln_Rot_mn", "ln_Fum_LM_mn", "ln_Fum_TM_mn", "ln_FUM_avg")){
+  h2.results.b[[trait]] = exp35b_h2(dat35b, trait)
+}
+```
+Get the summary of heritabilities
+
+```{r}
+for (i in names(h2.results.b)) {
+  print(i)
+  print(paste("heritability of line means =", round(h2.results.b[[i]], 2)))
+}
+```
+Now get the line mean values, output a file of means. 
+```{r}
+exp35_means = function(data, trait){
+  form = as.formula(paste(trait, "~ 1 + Entry"))
+  assign("form", form, envir = globalenv() )
+  mod = asreml(fixed = form, random = ~ Rep + Block:Rep, weights = NoEars, data = data, na.method.X='omit', maxiter = 25)
+
+  preds = predict(mod, classify = "Entry", data = data)
+  BLUEs = preds$predictions$pvals[c("Entry", "predicted.value")]
+  
+  #get the avg. standard error of line mean comparisons
+  avgLSD = data.frame(Entry = "Avg LSD", predicted.value = 2*preds$predictions$avsed)
+  
+  BLUEs = rbind(BLUEs, avgLSD)
+  return(BLUEs)
+}
+```
+
+
+```{r}
+exp35.means = list()
+for (trait in c("ln_Rot_mn", "ln_Fum_LM_mn", "ln_Fum_TM_mn", "ln_FUM_avg")){
+  meanies = exp35_means(dat35b, trait)
+  names(meanies)[2] = trait
+  exp35.means[[trait]] = meanies
+}
+
+exp35.means.df = exp35.means[[1]]
+for (i in 2:4) {
+  exp35.means.df = merge(exp35.means.df, exp35.means[[i]])
+}
+tbl_df(exp35.means.df)
+```
+Back-transform the data
+```{r}
+exp35.means.df = mutate(exp35.means.df,
+                        Rot_mn = exp(ln_Rot_mn) - 1,
+                        Fum_LM_mn = exp(ln_Fum_LM_mn) - 1,
+                        Fum_TM_mn = exp(ln_Fum_TM_mn) - 1,
+                        FUM_avg = exp(ln_FUM_avg) - 1)
+
+#force Avg LSD to bottom of data frame
+exp35.means.out = exp35.means.df
+exp35.means.out$pos = ifelse(exp35.means.out$Entry == "Avg LSD", 2, 1)
+exp35.means.out = exp35.means.out[order(exp35.means.out$pos, exp35.means.out$Entry),]
+exp35.means.out = exp35.means.out[,c("Entry", "ln_Rot_mn", "Rot_mn", "ln_FUM_avg", "FUM_avg")]
+names(exp35.means.out) = c("Entry", "ln_EarRot", "EarRot", "ln_FUM", "FUM")
+write.csv(exp35.means.out, file = "Exp35_2015_means.csv", row.names = F)
+```
+
+```{r}
+cor(filter(exp35.means.df, Entry != "Avg LSD") %>% select(-Entry) )
+```
+
+```{r}
+pairs(filter(exp35.means.df, Entry != "Avg LSD") %>% select(-Entry), main = "Line mean averages\nover inoculation methods and assays")
+```
